@@ -1,0 +1,518 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="description" content="noteの記事をAIに読ませて「創作ドック」を受け、その診断を健康診断の結果票の画像にするツール。">
+<style>:root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px/1.5 system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}*,*::before,*::after{box-sizing:border-box}</style>
+<title>創作ドック結果票メーカー</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=BIZ+UDPGothic:wght@400;700&display=swap">
+<style>
+/* Layout: 3段階のステッパー（はじめに → 貼り付け → 編集と保存）。編集は1枚＝1カード、左に入力・右に結果票 */
+:root{
+  --bg:#F3F2EC; --panel:#FFFFFF; --fg:#2C2C2A; --muted:#6F6E68; --line:#D6D3C8;
+  --accent:#0F6E56; --accent-fg:#FFFFFF; --soft:#E6F2EC; --warn:#B02A20; --chip:#F0EEE6;
+  --font:"BIZ UDPGothic","Hiragino Kaku Gothic ProN","Noto Sans JP",system-ui,sans-serif;
+  --mono:ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
+  --bg:#1B1D1B; --panel:#252826; --fg:#ECEBE6; --muted:#A6A59E; --line:#3A3E3B;
+  --accent:#4CC49B; --accent-fg:#0E1A15; --soft:#22352D; --warn:#F07A6E; --chip:#2E322F; color-scheme:dark}}
+:root[data-theme="dark"]{
+  --bg:#1B1D1B; --panel:#252826; --fg:#ECEBE6; --muted:#A6A59E; --line:#3A3E3B;
+  --accent:#4CC49B; --accent-fg:#0E1A15; --soft:#22352D; --warn:#F07A6E; --chip:#2E322F; color-scheme:dark}
+body{background:var(--bg);color:var(--fg);font-family:var(--font);font-size:15px;line-height:1.7}
+.wrap{max-width:1000px;margin:0 auto;padding-block:24px 64px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));display:flex;flex-direction:column;gap:18px}
+header h1{font-size:1.55rem;margin:0;letter-spacing:.04em;text-wrap:balance}
+header p{margin:.3rem 0 0;color:var(--muted);max-width:64ch}
+
+/* stepper */
+.steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.step{font:inherit;text-align:left;display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--muted);cursor:pointer;min-width:0}
+.step .n{flex:none;width:28px;height:28px;border-radius:50%;display:grid;place-items:center;font-weight:700;background:var(--chip);color:var(--muted);font-variant-numeric:tabular-nums}
+.step .t{font-weight:700;font-size:.9rem;line-height:1.3}
+.step[aria-selected="true"]{border-color:var(--accent);color:var(--fg);box-shadow:inset 0 -3px 0 var(--accent)}
+.step[aria-selected="true"] .n{background:var(--accent);color:var(--accent-fg)}
+@media (max-width:560px){.step{flex-direction:column;align-items:flex-start;gap:4px;padding:8px}.step .t{font-size:.8rem}}
+button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.panel h2{font-size:1.08rem;margin:0}
+.panel h3{font-size:.98rem;margin:0}
+ol.howto{margin:0;padding-left:1.4em;display:flex;flex-direction:column;gap:10px;max-width:68ch}
+ol.howto li::marker{font-weight:700;color:var(--accent)}
+ol.howto small{display:block;color:var(--muted);font-size:.84rem}
+.prompt{position:relative}
+.prompt pre{margin:0;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:14px;font-family:var(--mono);font-size:12.5px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:22em;overflow:auto}
+.flow{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.flow{grid-template-columns:minmax(0,1fr)}}
+.flow-step{display:flex;flex-direction:column;gap:2px;background:var(--bg);border-radius:8px;padding:12px 14px;min-width:0}
+.flow-step .fn{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;background:var(--accent);color:var(--accent-fg);font-weight:700;font-size:.85rem;margin-bottom:4px}
+.flow-step small,.route small{color:var(--muted);font-size:.84rem;line-height:1.6}
+.routes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+@media (max-width:640px){.routes{grid-template-columns:minmax(0,1fr)}}
+.route{display:flex;flex-direction:column;gap:4px;border:1px solid var(--line);border-radius:8px;padding:12px 14px;min-width:0}
+.route.rec{border-color:var(--accent);background:var(--soft)}
+.badge{align-self:flex-start;font-size:.72rem;font-weight:700;padding:1px 8px;border-radius:999px;background:var(--accent);color:var(--accent-fg)}
+.badge.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+.setlist{margin:.4rem 0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px}
+.slides{gap:12px}
+.slide-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.dots{display:flex;gap:6px}
+.dots i{width:8px;height:8px;border-radius:50%;background:var(--line);display:block}
+.dots i.on{background:var(--accent);width:22px;border-radius:4px}
+.pager{font-size:.8rem;color:var(--muted);font-variant-numeric:tabular-nums}
+.skip{margin-left:auto;font:inherit;font-size:.82rem;color:var(--accent);background:none;border:0;cursor:pointer;padding:4px 0;text-decoration:underline;text-underline-offset:3px}
+.slide{display:grid;grid-template-columns:minmax(0,260px) minmax(0,1fr);gap:24px;align-items:center;min-height:340px}
+.slide:not([data-slide="1"]){grid-template-columns:minmax(0,1fr)}
+@media (max-width:640px){.slide{grid-template-columns:minmax(0,1fr);min-height:0}.hero{max-width:220px;margin:0 auto}}
+.slide .hero{width:100%;height:auto;border:1px solid var(--line);border-radius:6px;background:#FBFAF6}
+.sbody{display:flex;flex-direction:column;gap:12px;max-width:62ch;min-width:0}
+.sbody h2{font-size:1.3rem;text-wrap:balance}
+.sbody p{margin:0}
+.sbody .btn{align-self:flex-start}
+.btn.big{padding:14px 22px;font-size:1.02rem}
+.opt{font-size:.72rem;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:8px;vertical-align:middle}
+.slide-nav{display:flex;justify-content:flex-start}
+.legal{border-top:1px solid var(--line);padding-top:10px}
+.legal ul{margin:.5rem 0 0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px}
+@media (prefers-reduced-motion: no-preference){.slide:not([hidden]){animation:sIn .25s ease-out}}
+@keyframes sIn{from{opacity:.0;transform:translateX(12px)}to{opacity:1;transform:none}}
+.map{display:grid;grid-template-columns:minmax(0,1.1fr) 88px minmax(0,1fr) 88px minmax(0,1fr);align-items:center;gap:6px}
+.map .col{display:flex;flex-direction:column;align-items:stretch;gap:6px;min-width:0}
+.node{display:flex;flex-direction:column;gap:6px;border:1px solid var(--line);border-radius:10px;padding:14px;background:var(--panel);min-width:0}
+.node b{font-size:1rem}
+.node small{color:var(--muted);font-size:.84rem;line-height:1.55}
+.node .btn{align-self:flex-start;padding:8px 14px;font-size:.9rem}
+.node.in{background:var(--bg)}
+.node.ai{background:var(--soft);border-color:var(--accent);text-align:center;align-items:center}
+.node.here{border:2px solid var(--accent)}
+.tag{align-self:flex-start;font-size:.72rem;font-weight:700;color:var(--accent);letter-spacing:.04em}
+.plus{align-self:center;font-weight:700;color:var(--muted);font-size:1.2rem;line-height:1}
+.bubble{margin-top:6px;background:var(--panel);border:1px dashed var(--accent);border-radius:8px;padding:8px 10px;font-size:.84rem;line-height:1.5}
+.mini{width:100%;max-width:150px;height:auto;border:1px solid var(--line);border-radius:4px;background:#FBFAF6;align-self:center}
+.arrow{display:flex;flex-direction:column;align-items:center;gap:2px;color:var(--accent);font-size:.72rem;font-weight:700;text-align:center;line-height:1.3}
+.arrow::after{content:"→";font-size:1.8rem;line-height:1}
+@media (max-width:760px){.map{grid-template-columns:minmax(0,1fr)}.arrow{flex-direction:row;justify-content:center;gap:8px;padding:2px 0}.arrow::after{content:"↓";font-size:1.5rem}.mini{max-width:180px}}
+.extras{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--line);padding-top:12px}
+.extras details p{margin:.4rem 0 0}
+.notes{background:var(--soft);border-radius:8px;padding:12px 16px}
+.notes ul{margin:.3rem 0 0;padding-left:1.2em;font-size:.88rem;display:flex;flex-direction:column;gap:4px}
+
+.basic{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:12px}
+label{display:flex;flex-direction:column;gap:4px;font-size:.8rem;color:var(--muted);letter-spacing:.03em;min-width:0}
+input,select,textarea{font:inherit;font-size:16px;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:8px 10px;min-width:0;width:100%;box-sizing:border-box}
+textarea{resize:vertical;min-height:4.2em}
+::placeholder{color:var(--muted);opacity:.55}
+.hint{font-size:.8rem;color:var(--muted);margin:0}
+
+.sheet{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+.sheet-head{display:flex;align-items:center;gap:10px;padding:10px 16px;background:var(--chip);border-bottom:1px solid var(--line)}
+.sheet-head .no{font-weight:700;color:var(--accent);font-variant-numeric:tabular-nums}
+.sheet-head .ttl{font-weight:700;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sheet-body{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,300px);gap:18px;padding:16px}
+@media (max-width:720px){.sheet-body{grid-template-columns:minmax(0,1fr)}}
+.fields{display:flex;flex-direction:column;gap:10px;min-width:0}
+.pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.prev{display:flex;flex-direction:column;gap:6px;min-width:0}
+.prev img{width:100%;height:auto;display:block;border:1px solid var(--line);border-radius:6px;background:#FBFAF6;-webkit-touch-callout:default}
+@media (max-width:720px){.prev{max-width:360px;width:100%;margin:0 auto}}
+.prev .tools{font-size:.78rem;color:var(--muted);text-align:center}
+.small{font:inherit;font-size:.8rem;font-weight:700;padding:6px 10px;border-radius:6px;border:1px solid var(--accent);background:transparent;color:var(--accent);cursor:pointer;white-space:nowrap}
+.small.del{border-color:var(--line);color:var(--muted)}
+.auto{background:var(--soft);border-radius:6px;padding:8px 10px;font-size:.85rem}
+.auto ol{margin:.2rem 0 0;padding-left:1.4em}
+.btn{font:inherit;font-weight:700;padding:11px 16px;border-radius:8px;border:1px solid var(--accent);cursor:pointer;background:var(--accent);color:var(--accent-fg)}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.row-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.next{align-self:flex-end}
+.status{font-size:.88rem;color:var(--accent);margin:0;min-height:1.4em;font-weight:700}
+.status.err{color:var(--warn)}
+.save-tip{background:var(--soft);border-radius:8px;padding:10px 14px;font-size:.88rem;margin:0}
+#bulk{font-family:var(--mono);font-size:13px;line-height:1.55;min-height:16em}
+details{font-size:.85rem}
+details pre{background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;margin:.5rem 0 0}
+.sample-tag{display:inline-block;font-size:.75rem;font-weight:700;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:1px 8px;margin-left:6px;vertical-align:middle}
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+  <header>
+    <h1>創作ドック結果票メーカー</h1>
+    <p>あなたのnoteの記事をAIに読ませて「創作ドック」を受け、その診断を健康診断の結果票の画像にします。</p>
+  </header>
+
+  <div class="steps" role="tablist" aria-label="手順">
+    <button class="step" role="tab" id="s1" aria-selected="true" aria-controls="v1"><span class="n">1</span><span class="t">はじめに</span></button>
+    <button class="step" role="tab" id="s2" aria-selected="false" aria-controls="v2"><span class="n">2</span><span class="t">AIの結果を貼り付け</span></button>
+    <button class="step" role="tab" id="s3" aria-selected="false" aria-controls="v3"><span class="n">3</span><span class="t">編集と画像保存</span></button>
+  </div>
+  <p class="status" id="status" aria-live="polite"></p>
+
+  <!-- 1 はじめに -->
+  <section id="v1" role="tabpanel" aria-labelledby="s1" class="panel">
+    <h2>やり方はこれだけ</h2>
+    <div class="map" role="list">
+      <div class="col" role="listitem">
+        <div class="node in">
+          <span class="tag">用意するもの ①</span>
+          <b>診断したい記事</b>
+          <small>3〜5本の本文をコピー<br>または noteのエクスポート（XML）</small>
+        </div>
+        <span class="plus" aria-hidden="true">＋</span>
+        <div class="node in">
+          <span class="tag">用意するもの ②</span>
+          <b>創作ドックのプロンプト</b>
+          <button class="btn" id="copyPrompt">プロンプトをコピー</button>
+          <span class="hint" id="copyHint"></span>
+        </div>
+      </div>
+      <div class="arrow" aria-hidden="true"><span>一緒に渡す</span></div>
+      <div class="col" role="listitem">
+        <div class="node ai">
+          <b>いつも使っているAI</b>
+          <small>ChatGPT・Gemini・Claude など</small>
+          <div class="bubble">返事の最後に<br><b>結果票データ</b>が出る</div>
+        </div>
+      </div>
+      <div class="arrow" aria-hidden="true"><span>コピーして貼る</span></div>
+      <div class="col" role="listitem">
+        <div class="node here">
+          <span class="tag">このページ</span>
+          <b>貼ると結果票ができる</b>
+          <img id="heroImg" class="mini" alt="できあがる結果票の見本">
+          <small>文字を直して、画像を保存</small>
+          <button class="btn" data-go="2">貼り付けへ</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="extras">
+      <details><summary>記事の渡し方</summary>
+        <ul class="setlist">
+          <li><b>コピーする場合</b>：記事を開いて本文をコピーし、AIのチャット欄に貼ります。まずは3〜5本で十分です。</li>
+          <li><b>エクスポートする場合</b>：noteの「自分の記事」→「エクスポート」。届いたメールからZipをダウンロードし、中のXMLファイルをAIに添付します（受け付けないときは末尾を「.txt」に変更）。下書きも含まれます。</li>
+          <li>本数は多すぎると読みが浅くなるので、20本前後、多くても50本が目安です。</li>
+          <li>AIが読むのは文章だけです。記事の中の画像やイラストは診断の対象になりません。</li>
+        </ul></details>
+      <details><summary>AIの学習をオフにする設定（おすすめ）</summary>
+        <p class="hint">記事の内容をAIに学習させたくない場合は、普段使っているAIの学習機能をオフにすることをおすすめします。すでにオフになっていれば不要です。</p>
+        <ul class="setlist">
+          <li><b>ChatGPT</b>：設定 → データコントロール →「すべての人のためにモデルを改善する」をオフ（一時チャットでも可）</li>
+          <li><b>Gemini</b>：設定 → アクティビティ →「Gemini アプリ アクティビティ」をオフ</li>
+          <li><b>Claude</b>：設定 → プライバシー →「Claudeの改善にご協力ください」をオフ</li>
+        </ul>
+        <p class="hint">※画面の表記は変わることがあります。記事の本文はお使いのAIの運営会社に送られ、扱いは各サービスの規約と設定によります。</p></details>
+      <details><summary>プロンプトの中身を見る</summary>
+        <p class="hint">そのまま使えます。【最後に】より上は自由に変えてOK。【最後に】の形式を変えると取り込めなくなります。</p>
+        <div class="prompt"><pre id="promptText">これから渡すのは、私がnoteに書いた記事です（本文の貼り付け、または書き出したファイル）。
+小説、エッセイ、日記など、種類は問いません。
+人間ドックならぬ「創作ドック」として、私の文章の癖を診断してください。
+
+【対象】
+・下書きは除外する
+・記事が多い場合は、新しい順に20本までを対象にする
+・文章だけを読む（画像の中身は対象外）
+
+【手順】
+1. 記事を読み、繰り返し出てくる癖を3〜7個見つける（記事が少なければ少なめでよい）
+　例：よく取り上げるテーマ、つい使う言葉や言い回し、話の運び方、書き出しや締め方の型、毎回出てくる人やモノ
+2. それぞれに、思わず笑える病名をつける（記事に出てくる具体的なモノや言葉を入れる）
+3. 項目ごとに、次の内容を書く
+ ・病名とふりがな
+ ・症状：一行で
+ ・陽性：該当した記事の数
+ ・判定：A異常なし／B軽度異常／C要経過観察／D要精密検査／E要治療 のどれか
+ ・医師コメント：事務的に、少し意地悪に一言（褒めない）
+ ・生活指導：あれば一言
+ ・検体：該当する記事タイトル
+4. 最後に、総合判定・総合コメント・次回受診の時期を書く
+
+【注意】
+・小説や物語のオチはネタバレしない
+・お世辞は不要。健康診断の医師のように淡々と
+・文章の添削ではなく、書き手の癖を面白がる診断にする
+
+【最後に】※この形式は変えずに出力すること
+診断の内容を、次の形式でコードブロックにまとめてください。
+受診者：（noteでの名前）
+検体：（読んだ記事の数）
+---
+No.1
+病名：
+ふりがな：
+症状：
+陽性：（数字のみ）
+判定：（A〜Eの1文字）
+医師コメント：（2行以内）
+生活指導：（なければこの行は省略）
+---
+（項目の数だけ繰り返す）
+---
+総合判定：（「要経過観察」などの言葉）
+添え書き：（ひとこと）
+総合コメント：（3行以内）
+次回受診：</pre></div></details>
+    </div>
+  </section>
+
+  <!-- 2 貼り付け -->
+  <section id="v2" role="tabpanel" aria-labelledby="s2" class="panel" hidden>
+    <h2>AIの結果を貼り付け</h2>
+    <div class="notes"><ul style="margin:0">
+      <li>入力した内容は、インターネットに送信されませんので、ご安心ください。</li>
+      <li>お使いのスマホやパソコンのWebブラウザ上でのみ動作します。</li>
+    </ul></div>
+    <label for="bulk">AIの返答の最後にある「結果票データ」をそのまま貼り付けてください
+      <textarea id="bulk" spellcheck="false"></textarea></label>
+    <div class="row-actions">
+      <button class="btn" id="import">取り込んで結果票を作る</button>
+      <button class="btn ghost" id="clearBulk">貼り付け欄を空にする</button>
+    </div>
+    <details>
+      <summary>貼り付ける形式の例</summary>
+      <pre id="sample">受診者：よっし
+検体：50
+---
+No.1
+病名：四つん這い体質
+ふりがな：よつんばいたいしつ
+症状：大きな話ほど、鼻・尻・四つん這いに着地する
+陽性：13
+判定：D
+医師コメント：思考派に見えますが、かなり肉体派です。
+生活指導：膝の保護を推奨します。
+---
+総合判定：要経過観察
+添え書き：治療の必要なし
+総合コメント：日常生活・執筆に支障はありません。
+次回受診：50作後</pre>
+      <p class="hint">項目は「---」で区切ります。判定は A〜E。陽性は数字か「多数」。生活指導は省略できます。</p>
+      <div class="row-actions" style="margin-top:.6rem"><button class="btn ghost" id="useSample">この例で試してみる</button></div>
+    </details>
+  </section>
+
+  <!-- 3 編集と保存 -->
+  <div id="v3" role="tabpanel" aria-labelledby="s3" hidden style="flex-direction:column;gap:16px">
+    <section class="panel">
+      <h2 id="editTitle">編集と画像保存<span class="sample-tag" id="sampleTag">記入例</span></h2>
+      <div class="basic">
+        <label for="patient">受診者名<input id="patient" autocomplete="off"></label>
+        <label for="total">記事数<input id="total" type="number" min="1" max="999" inputmode="numeric"></label>
+      </div>
+      <p class="save-tip">文字を直すと、右（スマホは下）の結果票にすぐ反映されます。画像は長押し（パソコンは右クリック →「画像を保存」）で保存してください。</p>
+      <div class="row-actions">
+        <button class="small" id="copyText">内容をテキストでコピー</button>
+        <button class="small del" id="resetAll">すべて消して最初から</button>
+        <span class="hint" id="resetHint"></span>
+      </div>
+      <textarea id="copyFallback" hidden readonly rows="8" style="font-family:var(--mono);font-size:12.5px"></textarea>
+    </section>
+    <div id="items" style="display:flex;flex-direction:column;gap:16px"></div>
+    <button class="btn ghost" id="addItem" style="align-self:flex-start">＋ 検査項目を追加</button>
+    <div id="totalSheet"></div>
+    <section class="panel" aria-labelledby="finishTitle">
+      <h2 id="finishTitle">仕上げ：紹介するときは</h2>
+      <p style="margin:0">noteの記事には1枚ずつ、SNSには全部をまとめた1枚が便利です。</p>
+      <div class="row-actions"><button class="btn" id="makeSheet">全部を1枚の画像にまとめる</button></div>
+      <div id="sheetOut" hidden style="display:flex;flex-direction:column;gap:6px">
+        <img id="sheetImg" alt="すべての結果票を並べた画像" style="border:1px solid var(--line);border-radius:6px;max-width:100%">
+        <p class="hint">長押し（パソコンは右クリック）で保存できます。</p>
+      </div>
+      <div class="notes">
+        <p style="margin:0">noteやSNSに載せるときは、ハッシュタグ <b>#創作ドック</b> をつけてもらえるとうれしいです。</p>
+      </div>
+      <ul class="hint" style="margin:0;padding-left:1.2em;display:flex;flex-direction:column;gap:4px">
+        <li>画像は、お使いのスマホやパソコンのWebブラウザ上で作っています（ローカルで処理）。</li>
+        <li>陽性の数はAIの数え方しだいで、だいたいの数です。厳密さより面白さでどうぞ。</li>
+        <li>お遊びで作っているツールです。予告なく終了することがあります。不具合やご要望は、noteの記事のコメントへどうぞ。</li>
+      </ul>
+    </section>
+  </div>
+</div>
+
+<script>
+(()=>{
+const W=1080,H=1350,S=2,MAX=8;
+const C={INK:"#2C2C2A",SUB:"#6F6E68",GREEN:"#1D9E75",GREEN_D:"#0F6E56",ORANGE:"#EF9F27",CREAM:"#FBFAF6",LINE:"#C9C6BC",PALE:"#E3E1D8"};
+const JC={A:"#0F6E56",B:"#C07A12",C:"#D8453A",D:"#B02A20",E:"#8E1F17"};
+const JL={A:"異常なし",B:"軽度異常",C:"要経過観察",D:"要精密検査",E:"要治療"};
+const FONT='"BIZ UDPGothic","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif';
+const X0=48,X1=1032,CW=X1-X0;
+const $=id=>document.getElementById(id);
+const cv=document.createElement('canvas');cv.width=W*S;cv.height=H*S;const ctx=cv.getContext('2d');
+
+/* ---------- state (記入例) ---------- */
+const blank=()=>({name:'',ruby:'',symptom:'',pos:'',judge:'C',comment:'',guidance:''});
+const EXAMPLE=()=>({patient:'よっし',total:'50',items:[
+ {name:'四つん這い体質',ruby:'よつんばいたいしつ',symptom:'大きな話ほど、鼻・尻・四つん這いに着地する',pos:'13',judge:'D',comment:'思考派に見えますが、かなり肉体派です。',guidance:'膝の保護を推奨します。'},
+ {name:'言われるがまま症候群',ruby:'いわれるがまましょうこうぐん',symptom:'丁寧語の業者に勧められると、断れない',pos:'9',judge:'C',comment:'作中で2回、本当に「言われるがまま」と\n書いています。自覚はあるようです。',guidance:''},
+ {name:'駄洒落痛風',ruby:'だじゃれつうふう',symptom:'ダジャレが、話の関節に溜まる',pos:'多数',judge:'B',comment:'発作時、本人は痛みを感じていません。',guidance:''}],
+ sogo:{judge:'要経過観察',sub:'治療の必要なし',comment:'日常生活・執筆に支障はありません。\nただし、症状が作品を通じて、\n読者に伝染る恐れがあります。',next:'50作後'}});
+let state=EXAMPLE();let isSample=true;
+
+/* ---------- drawing ---------- */
+const font=(size,bold)=>`${bold?700:400} ${size}px ${FONT}`;
+function text(t,x,y,{size=30,bold=false,color=C.INK,align='left',ls=0}={}){ctx.font=font(size,bold);ctx.fillStyle=color;ctx.textAlign=align;ctx.textBaseline='middle';if('letterSpacing' in ctx)ctx.letterSpacing=ls+'px';ctx.fillText(t,x,y);if('letterSpacing' in ctx)ctx.letterSpacing='0px'}
+function rect(x,y,w,h,fill,stroke){ctx.fillStyle=fill;ctx.fillRect(x,y,w,h);if(stroke){ctx.strokeStyle=stroke;ctx.lineWidth=2;ctx.strokeRect(x,y,w,h)}}
+function fitSize(t,maxW,start,bold,min=20){let s=start;ctx.font=font(s,bold);while(s>min&&ctx.measureText(t).width>maxW){s-=2;ctx.font=font(s,bold)}return s}
+function wrapLines(lines,maxW,size){ctx.font=font(size,false);const out=[];for(const raw of lines){let cur='';for(const ch of [...raw]){if(ctx.measureText(cur+ch).width>maxW&&cur&&!'、。，．」』）！？…ーっゃゅょ'.includes(ch)){out.push(cur);cur=ch}else cur+=ch}out.push(cur)}return out}
+function frame(label){rect(0,0,W,H,C.CREAM);rect(0,0,W/2,8,C.GREEN);rect(W/2,0,W/2,8,C.ORANGE);rect(X0,40,CW,100,C.GREEN_D);
+  text('創作ドック　結果票',X0+32,90,{size:46,bold:true,color:'#fff'});text(label,X1-32,90,{size:40,bold:true,color:'#fff',align:'right'});
+  text(`受診者：${state.patient||'あなた'} 様　検体：記事${state.total||'?'}本`,X1,176,{size:28,color:C.SUB,align:'right'})}
+function section(x,y,w,label,h){rect(x,y,w,h+56,'#fff',C.LINE);rect(x+1,y+1,w-2,55,C.PALE);text(label,x+28,y+28,{size:30,color:C.SUB})}
+function block(x,cy,lines,size,sp){const b=(lines.length-1)*sp;lines.forEach((l,i)=>text(l,x,cy-b/2+i*sp,{size}))}
+function commentBox(y3,rows,fixedLast){const avail=H-40-y3;const hs=rows.length===1?[avail-56]:[avail-56-24-56-fixedLast,fixedLast];
+  rows.forEach(([label,lines,size,sp],k)=>{const hh=hs[k];section(X0,y3,CW,label,hh);let s=size,w=wrapLines(lines,CW-80,s);
+    const fits=()=>(w.length-1)*Math.round(sp*s/size)+s<=hh-24;while(s>20&&!fits()){s-=2;w=wrapLines(lines,CW-80,s)}const lsp=Math.round(sp*s/size);const maxL=Math.max(1,Math.floor((hh-24-s)/lsp)+1);if(w.length>maxL){w=w.slice(0,maxL);w[maxL-1]=w[maxL-1].slice(0,-1)+'…'}block(X0+40,y3+56+hh/2,w,s,lsp);y3+=56+hh+24})}
+function drawItem(d,no){frame('No.'+no);const j=JC[d.judge]?d.judge:'C',jc=JC[j];const total=Math.max(1,parseInt(state.total)||50);
+  const y=200,h=290;section(X0,y,CW,'検査項目',h);
+  if(d.ruby)text(d.ruby,X0+40,y+112,{size:fitSize(d.ruby,CW-90,34,false),color:C.SUB,ls:4});
+  const nm=d.name||'（病名）';text(nm,X0+34,y+202,{size:fitSize(nm,CW-80,124,true,40),bold:true,color:d.name?C.INK:C.LINE});
+  if(d.symptom)text(d.symptom,X0+40,y+294,{size:fitSize(d.symptom,CW-80,42,false)});
+  const y2=y+56+h+24,h2=240,w2=(CW-24)/2;section(X0,y2,w2,'陽性検体',h2);section(X0+w2+24,y2,w2,'判定',h2);
+  const cx=X0+w2/2,raw=String(d.pos||'').trim(),num=/^\d+$/.test(raw)?parseInt(raw):null;let ratio;
+  if(num!==null){text(String(num),cx+20,y2+151,{size:120,bold:true,align:'right'});text('/'+total,cx+26,y2+171,{size:52,bold:true,color:C.SUB});ratio=num/total}
+  else{const t=raw||'多数';text(t,cx,y2+151,{size:fitSize(t,w2-60,96,true),bold:true,align:'center'});ratio=.44}
+  const filled=Math.round(Math.min(1,ratio)*50),bx=X0+(w2-25*17.5)/2;for(let i=0;i<50;i++){ctx.fillStyle=i<filled?jc:C.PALE;ctx.fillRect(bx+(i%25)*17.5,y2+231+Math.floor(i/25)*34,9,26)}
+  const jx=X0+w2+24+w2/2;text(j,jx,y2+151,{size:150,bold:true,color:jc,align:'center'});text(JL[j],jx,y2+256,{size:44,bold:true,color:jc,align:'center'});
+  const rows=[['医師コメント',(d.comment||' ').split('\n'),50,74]];if(d.guidance&&d.guidance.trim())rows.push(['生活指導',[d.guidance.trim()],50,74]);commentBox(y2+56+h2+24,rows,110)}
+function drawTotal(){const s=state.sogo,red=JC.C;frame('総合判定');const y=200,h=190;section(X0,y,CW,'総合判定',h);
+  const tj=s.judge||'要経過観察';text(tj,W/2,y+128,{size:fitSize(tj,CW-80,104,true),bold:true,color:red,align:'center'});
+  if(s.sub){ctx.font=font(34,true);const bw=Math.max(380,ctx.measureText(s.sub).width+80);ctx.strokeStyle=red;ctx.lineWidth=3.5;ctx.beginPath();if(ctx.roundRect)ctx.roundRect(W/2-bw/2,y+180,bw,56,28);else ctx.rect(W/2-bw/2,y+180,bw,56);ctx.stroke();text(s.sub,W/2,y+208,{size:34,bold:true,color:red,align:'center'})}
+  const y2=y+56+h+24,rh=72,h2=rh*4+8;section(X0,y2,CW,'各項目の判定',h2);const colw=CW/2;
+  state.items.slice(0,MAX).forEach((d,i)=>{const col=Math.floor(i/4),row=i%4,x=X0+col*colw+30,cy=y2+60+rh*row+rh/2,j=JC[d.judge]?d.judge:'C';
+    if(row){ctx.strokeStyle=C.PALE;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(x-10,y2+60+rh*row);ctx.lineTo(x+colw-50,y2+60+rh*row);ctx.stroke()}
+    text(String(i+1),x,cy,{size:30,color:C.SUB});const nm=d.name||'（病名）';text(nm,x+44,cy,{size:fitSize(nm,colw-160,34,false,20)});text(j,x+colw-60,cy,{size:44,bold:true,color:JC[j],align:'right'})});
+  ctx.strokeStyle=C.PALE;ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(W/2,y2+70);ctx.lineTo(W/2,y2+56+h2-12);ctx.stroke();
+  commentBox(y2+56+h2+24,[['医師コメント',(s.comment||' ').split('\n'),42,56],['次回受診',[s.next||'未定'],50,70]],86)}
+let fontsReady=Promise.resolve();
+function ensureFonts(){const all=JSON.stringify(state)+'創作ドック結果票受診者様検体記事作品本検査項目陽性判定医師コメント生活指導総合各の次回受診異常なし軽度要経過観察精密治療0123456789/No.ABCDE（）病名あなた未定';
+  fontsReady=Promise.all([document.fonts.load(font(40,false),all),document.fonts.load(font(40,true),all)]).catch(()=>{});return fontsReady}
+function renderUrl(kind,i){ctx.setTransform(S,0,0,S,0,0);ctx.clearRect(0,0,W,H);kind==='total'?drawTotal():drawItem(state.items[i],i+1);return cv.toDataURL('image/png')}
+
+/* ---------- UI ---------- */
+const status=(m,err)=>{const s=$('status');s.textContent=m;s.classList.toggle('err',!!err)};
+function esc(t){return String(t??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+const prevHTML=`<div class="prev"><img alt="結果票の画像"><div class="tools">長押し（右クリック）で保存</div></div>`;
+function itemHTML(d,i){const o=['A','B','C','D','E'].map(x=>`<option value="${x}"${d.judge===x?' selected':''}>${x}　${JL[x]}</option>`).join('');
+  return `<article class="sheet" data-i="${i}">
+  <div class="sheet-head"><span class="no">No.${i+1}</span><span class="ttl">${esc(d.name)||'検査項目'}</span><button class="small del" data-del>削除</button></div>
+  <div class="sheet-body"><div class="fields">
+    <label>病名<input data-k="name" value="${esc(d.name)}"></label>
+    <label>ふりがな<input data-k="ruby" value="${esc(d.ruby)}"></label>
+    <label>症状（一行）<input data-k="symptom" value="${esc(d.symptom)}"></label>
+    <div class="pair"><label>陽性（数字 or 多数）<input data-k="pos" value="${esc(d.pos)}"></label><label>判定<select data-k="judge">${o}</select></label></div>
+    <label>医師コメント<textarea data-k="comment" rows="2">${esc(d.comment)}</textarea></label>
+    <label>生活指導（なければ空欄）<input data-k="guidance" value="${esc(d.guidance)}"></label>
+  </div>${prevHTML}</div></article>`}
+function totalHTML(){const s=state.sogo;return `<article class="sheet" id="sogoSheet">
+  <div class="sheet-head"><span class="no">総合</span><span class="ttl">総合判定</span></div>
+  <div class="sheet-body"><div class="fields">
+    <div class="pair"><label>総合判定<input data-t="judge" value="${esc(s.judge)}"></label><label>添え書き<input data-t="sub" value="${esc(s.sub)}"></label></div>
+    <div class="auto">各項目の判定は、上の検査項目から自動で入ります。<ol id="autoList"></ol></div>
+    <label>医師コメント<textarea data-t="comment" rows="3">${esc(s.comment)}</textarea></label>
+    <label>次回受診<input data-t="next" value="${esc(s.next)}"></label>
+  </div>${prevHTML}</div></article>`}
+const timers={};function schedule(k,fn,ms=180){clearTimeout(timers[k]);timers[k]=setTimeout(fn,ms)}
+async function paintItem(i){await fontsReady;const el=document.querySelector(`.sheet[data-i="${i}"] .prev img`);if(el)el.src=renderUrl('item',i)}
+async function paintTotal(){await fontsReady;const el=document.querySelector('#sogoSheet .prev img');if(el)el.src=renderUrl('total');
+  const ol=$('autoList');if(ol)ol.innerHTML=state.items.slice(0,MAX).map(d=>`<li>${esc(d.name)||'（病名）'}　${d.judge}</li>`).join('')}
+async function paintAll(){await ensureFonts();for(let i=0;i<state.items.length;i++)await paintItem(i);await paintTotal()}
+function edited(){if(isSample){isSample=false;$('sampleTag').hidden=true}}
+function build(){
+  $('patient').value=state.patient;$('total').value=state.total;$('sampleTag').hidden=!isSample;
+  $('items').innerHTML=state.items.map(itemHTML).join('');$('totalSheet').innerHTML=totalHTML();
+  $('addItem').disabled=state.items.length>=MAX;$('addItem').textContent=state.items.length>=MAX?`検査項目は${MAX}つまでです`:'＋ 検査項目を追加';
+  document.querySelectorAll('.sheet[data-i]').forEach(sh=>{const i=+sh.dataset.i;
+    sh.querySelectorAll('[data-k]').forEach(f=>f.addEventListener('input',()=>{edited();state.items[i][f.dataset.k]=f.value;
+      if(f.dataset.k==='name')sh.querySelector('.ttl').textContent=f.value||'検査項目';
+      schedule('i'+i,async()=>{await ensureFonts();await paintItem(i)});if(f.dataset.k==='name'||f.dataset.k==='judge')schedule('t',paintTotal,400)}));
+    sh.querySelector('[data-del]').addEventListener('click',()=>{edited();state.items.splice(i,1);if(!state.items.length)state.items.push(blank());build();paintAll();status(`No.${i+1}を削除しました。`)});
+  });
+  document.querySelectorAll('#sogoSheet [data-t]').forEach(f=>f.addEventListener('input',()=>{edited();state.sogo[f.dataset.t]=f.value;schedule('t',async()=>{await ensureFonts();await paintTotal()})}));
+}
+$('patient').addEventListener('input',e=>{edited();state.patient=e.target.value;schedule('all',paintAll,300)});
+$('total').addEventListener('input',e=>{edited();state.total=e.target.value;schedule('all',paintAll,300)});
+$('addItem').addEventListener('click',()=>{if(state.items.length>=MAX)return;edited();state.items.push(blank());build();paintAll();
+  const last=document.querySelector(`.sheet[data-i="${state.items.length-1}"]`);last.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});last.querySelector('input').focus({preventScroll:true})});
+let armed=null;
+const disarm=()=>{const b=$('resetAll');b.textContent='すべて消して最初から';b.style.borderColor='';b.style.color='';$('resetHint').textContent=''};
+$('resetAll').addEventListener('click',()=>{const b=$('resetAll');
+  if(!armed){b.textContent='本当に消す（もう一度押す）';b.style.borderColor='var(--warn)';b.style.color='var(--warn)';$('resetHint').textContent='入力した内容がすべて消えます。';armed=setTimeout(()=>{armed=null;disarm()},4000);return}
+  clearTimeout(armed);armed=null;disarm();edited();
+  state={patient:'',total:'',items:[blank()],sogo:{judge:'要経過観察',sub:'',comment:'',next:''}};build();paintAll();status('すべて消しました。No.1から入力できます。');
+  const f=document.querySelector('.sheet[data-i="0"] input');if(f)f.focus()});
+
+/* ---------- まとめ画像・テキスト ---------- */
+const loadImg=src=>new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src});
+$('makeSheet').addEventListener('click',async()=>{await ensureFonts();
+  const urls=state.items.map((_,i)=>renderUrl('item',i));urls.push(renderUrl('total'));
+  const n=urls.length,cols=Math.min(3,n),rows=Math.ceil(n/cols),cw=540,ch=675,g=16;
+  const out=document.createElement('canvas');out.width=cols*cw+(cols+1)*g;out.height=rows*ch+(rows+1)*g;const o=out.getContext('2d');
+  o.fillStyle='#E9E7DF';o.fillRect(0,0,out.width,out.height);
+  for(let k=0;k<n;k++){const im=await loadImg(urls[k]);o.drawImage(im,g+(k%cols)*(cw+g),g+Math.floor(k/cols)*(ch+g),cw,ch)}
+  $('sheetImg').src=out.toDataURL('image/png');$('sheetOut').hidden=false;$('sheetOut').scrollIntoView({block:'nearest'});status(`${n}枚を1枚にまとめました。`)});
+function toText(){const L=[`受診者：${state.patient}`,`検体：${state.total}`];
+  state.items.forEach((d,i)=>{L.push('---',`No.${i+1}`,`病名：${d.name}`,`ふりがな：${d.ruby}`,`症状：${d.symptom}`,`陽性：${d.pos}`,`判定：${d.judge}`,`医師コメント：${(d.comment||'').replace(/\n/g,'\n')}`);if(d.guidance)L.push(`生活指導：${d.guidance}`)});
+  const s=state.sogo;L.push('---',`総合判定：${s.judge}`,`添え書き：${s.sub}`,`総合コメント：${s.comment}`,`次回受診：${s.next}`);return L.join('\n')}
+$('copyText').addEventListener('click',async()=>{const t=toText();
+  try{await navigator.clipboard.writeText(t);$('copyFallback').hidden=true;status('内容をテキストでコピーしました。')}
+  catch(e){const f=$('copyFallback');f.value=t;f.hidden=false;f.focus();f.select();status('自動でコピーできなかったので、下の文字を選択してコピーしてください。')}});
+
+/* ---------- copy prompt ---------- */
+$('copyPrompt').addEventListener('click',async()=>{const t=$('promptText').textContent;
+  try{await navigator.clipboard.writeText(t);$('copyHint').textContent='コピーしました。AIに貼り付けてください。'}
+  catch(e){const r=document.createRange();r.selectNodeContents($('promptText'));const s=getSelection();s.removeAllRanges();s.addRange(r);$('copyHint').textContent='自動でコピーできませんでした。選択された文字をコピーしてください。'}});
+
+/* ---------- parsing ---------- */
+const KEY=/^\s*[【\[]?\s*(受診者名?|検体数?|記事数|No\.?|NO\.?|№|番号|病名|ふりがな|フリガナ|読み|症状|陽性(?:数|検体)?|判定|医師コメント|コメント|生活指導|総合判定|添え書き|補足|総合コメント|総合医師コメント|次回受診)\s*[】\]]?\s*[：:]?\s*(.*)$/;
+function normJudge(v){const m=(v||'').normalize('NFKC').toUpperCase().match(/[A-E]/);if(m)return m[0];for(const [k,l] of Object.entries(JL))if((v||'').includes(l))return k;return 'C'}
+function parse(src){const lines=src.replace(/\r/g,'').replace(/```[a-z]*/g,'').split('\n');const p={};const items=[];let cur=null,last=null,sogo=null;
+  const flush=()=>{if(cur&&(cur.name||cur.symptom))items.push(cur);cur=null;last=null};
+  for(const line of lines){
+    if(/^\s*(-{3,}|—{2,}|ー{3,}|={3,})\s*$/.test(line)){flush();continue}
+    const m=line.match(KEY);
+    if(m){const k=m[1],v=m[2].trim();
+      if(/^受診者/.test(k)){p.patient=v.replace(/\s*様$/,'');last=null;continue}
+      if(/^(検体|記事数)/.test(k)){last=null;if(cur||sogo)continue;const n=v.normalize('NFKC').match(/\d+/);if(n)p.total=n[0];continue}
+      if(/^(No|NO|№|番号)/.test(k)){flush();cur=blank();last=null;continue}
+      const sm={'総合判定':'judge','添え書き':'sub','補足':'sub','総合コメント':'comment','総合医師コメント':'comment','次回受診':'next'};
+      if(sm[k]){flush();sogo=sogo||{judge:'',sub:'',comment:'',next:''};sogo[sm[k]]=v;last=sm[k]==='comment'?'t':null;continue}
+      if(!cur)cur=blank();
+      const im={'病名':'name','ふりがな':'ruby','フリガナ':'ruby','読み':'ruby','症状':'symptom','陽性':'pos','陽性数':'pos','陽性検体':'pos','判定':'judge','医師コメント':'comment','コメント':'comment','生活指導':'guidance'};
+      const f=im[k];if(f==='judge')cur.judge=normJudge(v);else if(f==='pos'){const n=v.normalize('NFKC').match(/^\s*(\d+)/);cur.pos=n?n[1]:v.replace(/\/.*$/,'').trim()}else cur[f]=v;
+      last=f==='comment'?'c':null;continue}
+    if(!line.trim())continue;
+    if(last==='c'&&cur){cur.comment+=(cur.comment?'\n':'')+line.trim();continue}
+    if(last==='t'&&sogo){sogo.comment+=(sogo.comment?'\n':'')+line.trim()}
+  }
+  flush();return{p,items:items.slice(0,MAX),sogo,over:items.length>MAX}}
+$('import').addEventListener('click',()=>{const r=parse($('bulk').value);
+  if(!r.items.length){status('読み取れる項目がありませんでした。「病名：」「判定：」などの形式になっているか確かめてください。',true);return}
+  isSample=false;state={patient:r.p.patient||state.patient,total:r.p.total||state.total,items:r.items,
+    sogo:r.sogo?{judge:(r.sogo.judge||'').normalize('NFKC').replace(/^\s*[A-E]\s*[(（]\s*(.+?)\s*[)）]\s*$/,'$1').replace(/^\s*([A-E])\s*$/,(m,x)=>JL[x])||'要経過観察',sub:r.sogo.sub||'',comment:r.sogo.comment||'',next:r.sogo.next||''}:state.sogo};
+  build();paintAll();go(3);
+  status(`${r.items.length}つの検査項目${r.sogo?'と総合判定':''}を取り込みました。${r.over?`（${MAX}つ目までを使っています）`:''}`)});
+$('clearBulk').addEventListener('click',()=>{$('bulk').value='';$('bulk').focus();status('貼り付け欄を空にしました。')});
+$('useSample').addEventListener('click',()=>{$('bulk').value=$('sample').textContent;$('bulk').focus();status('例を貼り付け欄に入れました。「取り込んで結果票を作る」を押してください。')});
+
+async function hero(){await ensureFonts();const saved=state;state=EXAMPLE();$('heroImg').src=renderUrl('item',0);state=saved}
+/* ---------- steps ---------- */
+function go(n){[1,2,3].forEach(k=>{$('s'+k).setAttribute('aria-selected',k===n);const v=$('v'+k);v.hidden=k!==n;if(k===3)v.style.display=k===n?'flex':''});
+  status('');window.scrollTo({top:0});if(n===3)paintAll()}
+[1,2,3].forEach(k=>$('s'+k).addEventListener('click',()=>go(k)));
+document.querySelectorAll('[data-go]').forEach(b=>b.addEventListener('click',()=>go(+b.dataset.go)));
+
+build();
+(document.fonts&&document.fonts.ready?document.fonts.ready:Promise.resolve()).then(()=>ensureFonts()).then(hero);
+})();
+</script>
+
+</body>
+</html>
